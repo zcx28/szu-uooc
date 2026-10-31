@@ -96,6 +96,19 @@ test('legacy profile-based history preserves opened, uncertain and failed result
   await f.restart(); assert.equal(f.service.state().counts.uncertain, 1);
 });
 
+test('Firefox checkin profile verification uses Firefox flags and the selected profile', async t => {
+  const directory = 'Profiles/学习 [2].default-release', commands = [];
+  const f = await fixture(t, { getBrowserKind: () => 'firefox',
+    discoverBrowser: async () => ({ kind: 'firefox', available: true, executable: '/fixture/firefox', userDataDir: '/fixture/profiles', profiles: [{ directory }] }),
+    openPages: async (urls, selected) => { commands.push(browserCommand(urls, selected)); return urls.map(url => ({ url, ok: true })); } });
+  await f.service.changeBrowser();
+  await f.service.testBrowser(directory);
+  await f.service.configure({ ...settings, profileDirectory: directory, accountConfirmed: true });
+  await f.service.tick();
+  assert.equal(commands.length, 2);
+  for (const command of commands) assert.deepEqual(command.args.slice(0, 3), ['-profile', path.join('/fixture/profiles', directory), '--new-window']);
+});
+
 test('offline and partial command failures retry after five minutes without reopening accepted pages', async t => {
   let attempt = 0;
   const batches = [];

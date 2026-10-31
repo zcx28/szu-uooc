@@ -76,5 +76,12 @@ test('the real browser selector changes a previously used offline Edge to Chrome
   await page.getByRole('button', { name: '使用此浏览器', exact: true }).click();
   await page.locator('#browser-dialog').waitFor({ state: 'hidden' });
   assert.equal((await app.state()).browser.kind, 'edge'); assert.equal(connections, 0);
+  await page.getByRole('button', { name: '更换浏览器', exact: true }).click();
+  await page.locator('#browser-kind').selectOption('firefox');
+  await page.locator('#browser-same-account').check();
+  await page.getByRole('button', { name: '使用此浏览器', exact: true }).click();
+  await page.locator('#browser-dialog').waitFor({ state: 'hidden' });
+  assert.equal((await app.state()).browser.kind, 'firefox'); assert.equal(connections, 0);
+  await page.getByRole('button', { name: '打开 Firefox 并连接', exact: true }).waitFor();
   assert.deepEqual(errors, []);
 });
