@@ -12,6 +12,21 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const executablePath = process.env.SZU_UOOC_CHROME || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || chromium.executablePath();
 
+test('Firefox setup offers its automation window without Chromium debugging instructions', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'szu-firefox-guide-'));
+  await saveJSON(path.join(dataDir, 'browser.json'), { kind: 'firefox', needsCourseRefresh: true });
+  const app = await createConsole({ appDir, dataDir, checkDependencies: async () => true,
+    browserOptions: { discoverBrowser: async ({ kind }) => ({ kind, installed: true, available: true, profiles: [] }) }, checkinOptions: { autoTick: false } });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  const browser = await chromium.launch({ executablePath, headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(app.url);
+  await page.getByRole('button', { name: '打开 Firefox 并连接', exact: true }).waitFor();
+  assert.equal(await page.locator('#debug-url').count(), 0);
+  assert.match(await page.locator('#guide-content').innerText(), /独立的 Firefox 窗口/);
+});
+
 test('the real browser selector changes a previously used offline Edge to Chrome after manual verification', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'szu-browser-selection-ui-'));
   await saveJSON(path.join(dataDir, 'browser.json'), { kind: 'edge', needsCourseRefresh: false });

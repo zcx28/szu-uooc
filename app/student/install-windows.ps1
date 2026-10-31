@@ -8,6 +8,25 @@ $temp = $null
 $locked = $false
 $help = '请确认电脑能打开网页，再双击「启动-Windows.cmd」。仍不能打开时，重新下载并完整解压安装包，再启动。'
 $stage = '检查运行环境'
+function Invoke-LoggedNode([string]$Arguments, [string]$WorkingDirectory) {
+    # Native stderr can contain successful npm notices; decide from the process exit code.
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo.FileName = $node
+    $process.StartInfo.Arguments = $Arguments
+    $process.StartInfo.WorkingDirectory = $WorkingDirectory
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.CreateNoWindow = $true
+    $process.StartInfo.RedirectStandardOutput = $true
+    $process.StartInfo.RedirectStandardError = $true
+    try {
+        [void]$process.Start()
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        Add-Content -LiteralPath (Join-Path $root 'runtime/install-error.log') -Encoding UTF8 -Value ($output.Result + $errors.Result)
+        return $process.ExitCode
+    } finally { $process.Dispose() }
+}
 try {
     Set-Location -LiteralPath $root
     if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITEW6432 -ne 'AMD64') {
@@ -54,8 +73,14 @@ try {
         $expected = ($line[0] -split '\s+')[0]
         if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) { throw '下载文件校验失败，请重新点击下载依赖。' }
         $stage = '解压运行环境'
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::ExtractToDirectory($archive, $temp)
+        $tar = Join-Path $env:SystemRoot 'System32/tar.exe'
+        if (Test-Path -LiteralPath $tar) {
+            & $tar -xf $archive -C $temp
+            if ($LASTEXITCODE -ne 0) { throw '运行环境解压失败，请重新下载并完整解压安装包。' }
+        } else {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::ExtractToDirectory($archive, $temp)
+        }
         $stage = '替换运行环境'
         if (Test-Path -LiteralPath $runtime) { Remove-Item -LiteralPath $runtime -Recurse -Force }
         Move-Item -LiteralPath (Join-Path $temp 'node-v24.21.0-win-x64') -Destination $runtime
@@ -68,19 +93,15 @@ try {
     Write-Host '[3/3] 下载浏览器连接组件……'
     $env:PATH = $runtime + ';' + $env:PATH
     $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
-    Push-Location -LiteralPath (Join-Path $root 'app')
-    try {
-        & $node (Join-Path $runtime 'node_modules/npm/bin/npm-cli.js') ci --ignore-scripts --omit=optional --no-audit --no-fund --registry=https://registry.npmjs.org --cache (Join-Path $root 'runtime/npm-cache') *>&1 | Out-File -LiteralPath (Join-Path $root 'runtime/install-error.log') -Encoding UTF8
-        if ($LASTEXITCODE -ne 0) { throw '组件下载失败，请检查网络后重新点击下载依赖。' }
-    } finally { Pop-Location }
+    $npmArguments = '"{0}" ci --ignore-scripts --omit=optional --no-audit --no-fund --registry=https://registry.npmjs.org --cache "{1}"' -f (Join-Path $runtime 'node_modules/npm/bin/npm-cli.js'), (Join-Path $root 'runtime/npm-cache')
+    if ((Invoke-LoggedNode $npmArguments (Join-Path $root 'app')) -ne 0) { throw '组件下载失败，请检查网络后重新点击下载依赖。' }
     $stage = '检查浏览器连接组件'
-    & $node 'app/student/start.mjs' --check *>&1 | Out-File -LiteralPath (Join-Path $root 'runtime/install-error.log') -Append -Encoding UTF8
-    if ($LASTEXITCODE -ne 0) { throw '依赖自检失败，请重新点击下载依赖。' }
+    if ((Invoke-LoggedNode 'app/student/start.mjs --check' $root) -ne 0) { throw '依赖自检失败，请重新点击下载依赖。' }
     Write-Host '下载完成。现在可以双击「启动-Windows.cmd」；以后无需重复下载。'
 } catch {
     $diagnostic = $_.ToString()
     $details = $_ | Format-List * -Force | Out-String
-    try { New-Item -ItemType Directory -Force (Join-Path $root 'runtime') | Out-Null; Add-Content -LiteralPath (Join-Path $root 'runtime/install-error.log') -Encoding UTF8 -Value ("失败步骤：$stage`n$details") } catch {}
+    try { New-Item -ItemType Directory -Force (Join-Path $root 'runtime') | Out-Null; Add-Content -LiteralPath (Join-Path $root 'runtime/install-error.log') -Encoding UTF8 -Value ("失败步骤：$stage`n原因：$diagnostic`n$details") } catch {}
     Write-Host ('失败步骤：' + $stage)
     Write-Host ('原因：' + $diagnostic)
     Write-Host $help

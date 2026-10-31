@@ -3,12 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { allowedHost } from '../browser-bridge.mjs';
 
 export const checkinMarker = 'szu_checkin';
 export const browserTypes = {
   chrome: { name: 'Chrome', debugURL: 'chrome://inspect/#remote-debugging' },
   edge: { name: 'Edge', debugURL: 'edge://inspect/#remote-debugging' },
+  firefox: { name: 'Firefox', debugURL: 'about:debugging' },
 };
 
 export async function activateChromeProcess(pid, { platform = process.platform, execFileImpl = execFile } = {}) {
@@ -29,21 +31,48 @@ export function checkinURL(value, marked = false) {
 }
 
 export async function discoverBrowser({ kind = 'chrome', platform = process.platform, home = os.homedir(), env = process.env } = {}) {
-  if (!Object.hasOwn(browserTypes, kind)) throw new Error('请选择 Chrome 或 Edge。');
+  if (!Object.hasOwn(browserTypes, kind)) throw new Error('请选择 Chrome、Edge 或 Firefox。');
   const info = { kind, ...browserTypes[kind], installed: false, available: false, profiles: [] };
-  const app = kind === 'edge' ? 'Microsoft Edge' : 'Google Chrome';
+  const app = kind === 'edge' ? 'Microsoft Edge' : kind === 'firefox' ? 'Firefox' : 'Google Chrome';
   const folder = kind === 'edge' ? 'Microsoft/Edge' : 'Google/Chrome';
   const binary = kind === 'edge' ? 'msedge.exe' : 'chrome.exe';
   let candidates, userDataDir;
-  if (platform === 'darwin') {
+  if (kind === 'firefox') {
+    // Firefox has no CDP endpoint; detection only locates the binary and profiles.
+    // Snap installs keep profiles under ~/snap/firefox/common/.mozilla.
+    if (platform !== 'linux') return { ...info, error: 'Firefox 目前仅在 Linux 上支持。' };
+    candidates = ['/usr/bin/firefox', '/usr/local/bin/firefox', '/snap/bin/firefox'];
+    const roots = [path.join(home, 'snap/firefox/common/.mozilla/firefox'), path.join(home, '.mozilla/firefox')];
+    userDataDir = (await Promise.all(roots.map(async dir => await fs.stat(path.join(dir, 'profiles.ini')).catch(() => null) ? dir : null))).find(Boolean) || roots[0];
+  } else if (platform === 'darwin') {
     candidates = [`/Applications/${app}.app/Contents/MacOS/${app}`, path.join(home, `Applications/${app}.app/Contents/MacOS/${app}`)];
     userDataDir = path.join(home, 'Library/Application Support', kind === 'edge' ? 'Microsoft Edge' : 'Google/Chrome');
   } else if (platform === 'win32') {
     candidates = [env.LOCALAPPDATA, env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean).map(root => path.join(root, folder, 'Application', binary));
     userDataDir = env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, folder, 'User Data');
-  } else return { ...info, error: '目前支持 Windows 和 macOS 的 Chrome / Edge。' };
+  } else if (platform === 'linux') {
+    const names = kind === 'edge' ? ['microsoft-edge', 'microsoft-edge-stable', '/opt/microsoft/msedge/microsoft-edge'] : ['google-chrome', 'google-chrome-stable', '/opt/google/chrome/chrome'];
+    candidates = names.flatMap(name => path.isAbsolute(name) ? [name] : ['/usr/bin', '/usr/local/bin'].map(root => path.join(root, name)));
+    userDataDir = path.join(home, '.config', kind === 'edge' ? 'microsoft-edge' : 'google-chrome');
+  } else return { ...info, error: '目前支持 Windows、macOS 和 Linux 的 Chrome / Edge。' };
   const executable = (await Promise.all(candidates.map(async file => await fs.stat(file).catch(() => null) ? file : null))).find(Boolean);
   if (!executable || !userDataDir) return { ...info, error: `未找到 ${app}，请先安装并登录课程网站。` };
+  if (kind === 'firefox') {
+    // Firefox profiles live in profiles.ini, not Chrome's "Local State"; the automation
+    // connection uses its own dedicated profile, so a missing profile list is not fatal.
+    let profiles = [];
+    try {
+      const ini = await fs.readFile(path.join(userDataDir, 'profiles.ini'), 'utf8');
+      profiles = [...ini.matchAll(/\[Profile\d+\]([^\[]*)/g)].map(match => match[1]).map(block => {
+        const name = block.match(/^Name=(.*)$/m)?.[1]?.trim();
+        const relative = !block.match(/^IsRelative=0$/m);
+        const directory = block.match(/^Path=(.*)$/m)?.[1]?.trim();
+        const isDefault = /^Default=1$/m.test(block);
+        return relative && directory && /^[a-zA-Z0-9 ._-]{1,80}$/.test(directory) ? { directory, name: (name || directory).slice(0, 120), isDefault } : null;
+      }).filter(Boolean);
+    } catch {}
+    return { ...info, installed: true, available: true, executable, userDataDir: await fs.realpath(userDataDir).catch(() => userDataDir), profiles, lastUsedProfile: profiles.find(p => p.isDefault)?.directory || profiles[0]?.directory || '' };
+  }
   try {
     // Read profile names only. Never read cookies, passwords or browsing history.
     const state = JSON.parse(await fs.readFile(path.join(userDataDir, 'Local State'), 'utf8'));
@@ -54,7 +83,41 @@ export async function discoverBrowser({ kind = 'chrome', platform = process.plat
 }
 export const discoverChrome = discoverBrowser;
 
+export async function importFirefoxSession(userDataDir, destDir, profileDirectory) {
+  // An existing automation profile owns its login and pending submissions.
+  if (!destDir || await fs.stat(destDir).catch(() => null)) return [];
+  return firefoxCookiesFromProfile(userDataDir, profileDirectory);
+}
+
+export async function firefoxCookiesFromProfile(userDataDir, profileDirectory) {
+  if (!userDataDir || !/^[a-zA-Z0-9 ._-]{1,80}$/.test(profileDirectory || '') || ['.', '..'].includes(profileDirectory)) return [];
+  const src = path.join(userDataDir, profileDirectory);
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'szu-uooc-ff-cookies-'));
+  try {
+    for (const name of ['cookies.sqlite', 'cookies.sqlite-wal', 'cookies.sqlite-shm']) {
+      await fs.copyFile(path.join(src, name), path.join(temp, name)).catch(() => {});
+    }
+    const db = new DatabaseSync(path.join(temp, 'cookies.sqlite'), { readOnly: true });
+    try {
+      const rows = db.prepare('SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite FROM moz_cookies WHERE originAttributes = \'\'').all();
+      return rows.flatMap(row => {
+        if (typeof row.host !== 'string' || typeof row.name !== 'string' || typeof row.value !== 'string') return [];
+        const host = row.host.replace(/^\./, '');
+        if (!allowedHost(host) && !/(^|\.)(uoocuniversity\.com|szu\.edu\.cn)$/.test(host)) return [];
+        const expiry = Number(row.expiry);
+        let expires = -1;
+        if (Number.isFinite(expiry) && expiry > 0) expires = expiry > 1e15 ? Math.floor(expiry / 1e6) : expiry > 1e12 ? Math.floor(expiry / 1000) : expiry;
+        const sameSite = row.sameSite === 2 ? 'Strict' : 'Lax';
+        return [{ name: row.name, value: row.value, domain: row.host, path: row.path || '/', expires, httpOnly: Boolean(row.isHttpOnly), secure: Boolean(row.isSecure), sameSite }];
+      });
+    } finally { db.close(); }
+  } catch { return []; }
+  finally { await fs.rm(temp, { recursive: true, force: true }).catch(() => {}); }
+}
+
 export function browserCommand(urls, browser) {
+  // Firefox takes profile flags differently; just open a window in the default profile.
+  if (browser?.kind === 'firefox') return { command: browser.executable, args: ['--new-window', ...urls] };
   if (!browser?.executable || !browser.userDataDir || !/^[a-zA-Z0-9 _-]{1,80}$/.test(browser.profileDirectory || '')) throw new Error('请在签到设置中选择已登录的浏览器资料。');
   return { command: browser.executable, args: [`--user-data-dir=${browser.userDataDir}`, `--profile-directory=${browser.profileDirectory}`, ...urls] };
 }

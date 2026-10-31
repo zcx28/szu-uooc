@@ -301,8 +301,12 @@ handleCommand = action => {
   commandQueue = commandQueue.then(async () => {
     if (stopping) return;
     if (action === 'focus') {
-      const session = await page.context().newCDPSession(page);
-      try { if (stopping) return; const { windowId } = await session.send('Browser.getWindowForTarget'); if (!stopping) await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }); } finally { await session.detach(); }
+      try {
+        const session = await page.context().newCDPSession(page);
+        try { if (stopping) return; const { windowId } = await session.send('Browser.getWindowForTarget'); if (!stopping) await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }); } finally { await session.detach(); }
+      } catch (error) {
+        if (!/CDP session is only available in Chromium/i.test(error.message)) throw error;
+      }
       if (stopping) return;
       await page.bringToFront(); if (!stopping) await options.focusBrowser?.(); return;
     }
@@ -420,7 +424,7 @@ try {
             };
             try {
               const clicked = options.verify ? await options.verify(click, { page, state }) : await click();
-              if (clicked) { verificationClickFailures = 0; report('已点击原生验证控件；继续等待网站确认。若出现额外挑战，请在 浏览器 接管。'); }
+              if (clicked) { verificationClickFailures = 0; report('验证已提交，继续等待网站确认。若仍停在验证页，请在浏览器窗口内手动完成智能验证。'); }
             } catch (error) {
               if (!stopping && !userPaused) {
                 verificationClickFailures++;

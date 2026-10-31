@@ -69,6 +69,31 @@ test('debug setup refuses an unsupported Chrome internal URL launch instead of r
   await session.close();
 });
 
+test('opening the site and reading courses preserve existing course and unrelated tabs', async t => {
+  for (const kind of ['chrome', 'firefox']) await t.test(kind, async () => {
+    const navigated = [], closed = [], created = [];
+    const course = { url: () => courseURL('123'), goto: async () => assert.fail('must preserve the course tab') };
+    const unrelated = { url: () => 'https://example.test/', goto: async () => assert.fail('must preserve unrelated tabs') };
+    const pages = [course, unrelated];
+    const context = { pages: () => pages, newPage: async () => {
+      let url = 'about:blank';
+      const page = { url: () => url, goto: async value => { url = value; navigated.push(value); }, bringToFront: async () => {},
+        waitForFunction: async () => {}, evaluate: async () => [], close: async () => closed.push(page) };
+      pages.push(page); created.push(page); return page;
+    } };
+    const browser = new EventEmitter(); browser.isConnected = () => true; browser.contexts = () => [context]; browser.close = async () => {};
+    const session = createBrowserSession({ connectBrowser: async () => browser, getBrowserKind: () => kind });
+    try {
+      await session.get();
+      await assert.rejects(session.courses(), /我的课程/);
+      await session.open('site');
+      assert.equal(created.length, 1, 'reuse the portal tab created for the catalog');
+      assert.deepEqual(navigated, ['https://www.uooc.net.cn/home/index', 'https://www.uooc.net.cn/home/index']);
+      assert.equal(closed.length, 0, 'keep the login/catalog tab open for manual login');
+    } finally { await session.close(); }
+  });
+});
+
 test('course startup reuses the original browser and stops without closing its user tabs', async t => {
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'szu-original-browser-'));
   const configFile=path.join(dataDir,'api.json');await saveJSON(configFile,{...defaults,api_key:'original-browser-fixture-key'});

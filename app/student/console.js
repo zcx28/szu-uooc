@@ -59,7 +59,8 @@ function renderGuide() {
   if (environment.status !== 'ready') html = `<h2>${esc(environment.status === 'error' ? '启动文件未就绪' : '正在准备运行环境')}</h2>${environment.status === 'error' ? '<button class="button primary" data-environment>重新下载</button>' : '<progress aria-label="正在准备运行环境"></progress>'}`;
   else if (browser.selectionRequired) html = '<h2>选择学习浏览器</h2><div class="guide-actions"><button class="button primary" data-open="browser">选择浏览器</button></div>';
   else if (browser.status !== 'connected') {
-    if (guideStep === 'login' && !state.courses.length && browser.status !== 'connecting') html = '<h2>登录课程账号</h2><div class="guide-actions"><button class="button primary" data-browser-open="site">打开 UOOC</button><button class="button secondary" data-guide-step="debug">已登录，下一步</button></div>';
+    if (browser.kind === 'firefox') html = '<h2>连接 Firefox</h2><p class="guide-note">将打开独立的 Firefox 窗口。首次尝试导入优课网登录；需要时请在该窗口登录，再读取课程。</p><div class="guide-actions"><button class="button primary" data-connect>打开 Firefox 并连接</button></div>';
+    else if (guideStep === 'login' && !state.courses.length && browser.status !== 'connecting') html = '<h2>登录课程账号</h2><div class="guide-actions"><button class="button primary" data-browser-open="site">打开 UOOC</button><button class="button secondary" data-guide-step="debug">已登录，下一步</button></div>';
     else html = `<h2>${browser.status === 'connecting' ? `在 ${esc(browserName())} 中允许连接` : `连接 ${esc(browserName())}`}</h2><div class="debug-address"><input id="debug-url" aria-label="${esc(browserName())} 调试页地址" readonly value="${esc(browser.debugURL)}"><button class="button secondary" data-copy-debug>复制调试页地址</button></div><ol class="guide-steps"><li>复制地址，在 ${esc(browserName())} 中粘贴打开。</li><li>开启 <strong>Allow remote debugging</strong>，连接时选择「允许」。</li></ol><div class="guide-actions"><button class="button primary" data-connect>${browser.status === 'connecting' ? '等待允许…' : `已开启，连接 ${esc(browserName())}`}</button></div>`;
   } else if (browser.catalog === 'error') html = '<h2>重新打开我的课程</h2><div class="guide-actions"><button class="button primary" data-browser-open="site">打开 UOOC</button><button class="button secondary" data-read-courses>已登录，读取课程</button></div>';
   else if (!state.courses.length) html = '<h2>导入课程</h2><div class="guide-actions"><button class="button primary" data-read-courses>读取我的课程</button><button class="button secondary" data-browser-open="site">打开我的课程</button></div><p class="guide-note"><button class="text-button" data-open="add">粘贴课程网址</button></p>';
@@ -90,7 +91,7 @@ function render() {
   $('#checkin-summary').textContent = state.checkin?.settings.enabled ? '已开启' : '未开启';
   $('#browser-name-summary').textContent = browserName();
   $('#learning-browser-status').textContent = `${browserName()} · ${state.browser?.status === 'connected' ? '已连接' : state.browser?.status === 'connecting' ? '正在连接' : '未连接'}`;
-  $('#change-learning-browser').title = state.activeIds.length ? '先停止当前课程，再更换浏览器' : '选择 Chrome 或 Edge';
+  $('#change-learning-browser').title = state.activeIds.length ? '先停止当前课程，再更换浏览器' : '选择已安装的学习浏览器';
   $('#connect-again-label').textContent = '重新连接 ' + browserName();
   $('#checkin-profile-label').textContent = browserName() + ' 个人资料';
   $('#browser-summary').textContent = state.browser?.status === 'connected' ? '已连接' : '未连接';

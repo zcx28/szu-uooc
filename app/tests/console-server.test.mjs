@@ -59,7 +59,7 @@ test('console protects credentials, validates inputs, controls a course, runs on
     assert.equal(hostStatus, 403);
     await client.post('/api/config', { api_key: 'bad key' }, 400);
     await client.post('/api/config', { api_key: 'fixture-private-key' });
-    assert.equal((await fs.stat(path.join(dataDir, 'api.json'))).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal((await fs.stat(path.join(dataDir, 'api.json'))).mode & 0o777, 0o600);
     assert(!JSON.stringify(await client.get()).includes('fixture-private-key'));
     await client.post('/api/test-connection'); assert.equal(calls, 1); assert.equal((await client.get()).connection.status, 'listed');
     const edited = await client.post('/api/test-connection', { model: 'unsaved-model' });

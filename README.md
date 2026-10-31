@@ -10,7 +10,7 @@
 
 请大家遵守学校及课程平台的相关规定，合理使用技术。
 
-Windows / Mac 新手版。
+Windows / Mac / Linux x86_64 桌面新手版。
 
 **[下载最新安装包 ShenYiShua.zip](https://github.com/zcx28/szu-uooc/releases/latest/download/ShenYiShua.zip)** · [查看本次更新](https://github.com/zcx28/szu-uooc/releases/latest)
 
@@ -18,11 +18,19 @@ Windows / Mac 新手版。
 
 1. 在旧控制台点「设置 → 退出程序」。
 2. 下载上面的 `ShenYiShua.zip`，完整解压到一个新文件夹，不要直接在压缩包里启动。
-3. Windows 双击「启动-Windows.cmd」；Mac 双击「启动-Mac.command」。首次准备组件时保持联网。
+3. Windows 双击「启动-Windows.cmd」；Mac 双击「启动-Mac.command」；Linux 在解压目录运行 `bash ./启动‑Linux.command`。首次准备组件时保持联网。
 4. 原来的个人设置、课程列表和费用记录会保留。首页可点「更换浏览器」，选择平时登录课程的 Chrome 或 Edge，按提示连接并读取课程。
 5. 使用 AI 解题时核对原网址和 Key；遇到「费用待核对」，先查看服务商账单，再回到原课程点「继续」。服务设置变化或检测未通过时，再点「检测并保存」。
 
 **不用卸载浏览器，不要删除原来的设置或费用账本。** 更新时不要同时运行新旧两个程序。若切换浏览器时提示上次交卷未确认，请先按提示核对。
+
+## Linux 支持与 PR #1 修复
+
+- Linux x86_64 安装器自动下载、校验并解压 Node 24.21.0，安装 Playwright 和配套 Firefox；需联网、图形桌面及 `bash`、`curl`、`tar`、`sha256sum`。
+- 启动器等待本次启动的就绪通知，不会误用旧控制台地址；首次启动、重复启动及下载失败后重试均沿用原设置和费用记录。
+- Chrome / Edge 继续连接原浏览器。Linux Firefox 使用独立自动化窗口，首次只尝试导入优课网及学校登录 Cookie；不把个人 Cookie 数据库、密码文件或网站存储复制到自动化资料，重连保留自动化窗口自己的登录与未确认交卷记录。
+- 「打开 UOOC」和读取课程使用首页标签页，保留课程及其他网站标签页。Firefox 的智能验证需要本人在窗口内完成。
+- Linux 暂不支持应用内开机自启动。若 Firefox 提示缺少系统库，请在解压目录执行 `runtime/linux-x64/bin/node app/node_modules/playwright/cli.js install-deps firefox`，按系统提示安装依赖后重试。
 
 ## 0.1.22 熄屏续播修复
 

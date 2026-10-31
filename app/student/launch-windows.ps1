@@ -7,13 +7,23 @@ try {
     $ready = Join-Path $root ('runtime/launch-' + $id + '.json')
     $output = Join-Path $root ('runtime/launch-' + $id + '.log')
     $errors = Join-Path $root ('runtime/launch-' + $id + '-error.log')
-    $arguments = '"{0}" --ready-file "{1}"' -f $script, $ready
-    $process = Start-Process -FilePath $node -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $output -RedirectStandardError $errors -PassThru
+    # Node passes paths literally and keeps the console independent of this launcher.
+    $bootstrap = @'
+const fs = require('node:fs'), { spawn } = require('node:child_process');
+const [script, ready, root, output, errors] = process.argv.slice(1);
+const child = spawn(process.execPath, [script, '--ready-file', ready], {
+    cwd: root, detached: true, windowsHide: true,
+    stdio: ['ignore', fs.openSync(output, 'w'), fs.openSync(errors, 'w')]
+});
+child.once('error', error => { console.error(error.message); process.exitCode = 1; });
+child.once('spawn', () => { console.log(child.pid); child.unref(); });
+'@
+    $consoleProcessId = & $node -e $bootstrap $script $ready $root $output $errors
+    if ($LASTEXITCODE -ne 0 -or [string]$consoleProcessId -notmatch '^\d+$') { throw '控制台启动命令失败。' }
     for ($i = 0; $i -lt 40; $i++) {
         if (Test-Path -LiteralPath $ready) { Remove-Item -LiteralPath $ready -Force; Write-Host 'szu-uooc 控制台已打开，可以关闭这个窗口。'; exit 0 }
-        if ($process.HasExited) { throw '控制台没有成功打开，请查看下面的原因后重新启动。' }
+        if (-not (Get-Process -Id ([int]$consoleProcessId) -ErrorAction SilentlyContinue)) { throw '控制台没有成功打开，请查看下面的原因后重新启动。' }
         Start-Sleep -Milliseconds 250
-        $process.Refresh()
     }
     throw '控制台启动超时，请检查电脑和网络后重新启动。'
 } catch {

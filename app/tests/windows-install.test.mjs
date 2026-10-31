@@ -10,10 +10,13 @@ import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
 const powershell = process.env.PWSH || (process.platform === 'win32' ? 'powershell.exe' : 'pwsh');
+// Let the selected PowerShell build its own module path instead of inheriting another edition's modules.
+const shellEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'psmodulepath'));
 const available = !spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']).error;
 const installer = fileURLToPath(new URL('../student/install-windows.ps1', import.meta.url));
 const launcher = fileURLToPath(new URL('../student/launch-windows.ps1', import.meta.url));
 const folder = 'node-v24.21.0-win-x64';
+const nestedNpmFile = 'node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/build-ideal-tree.js';
 let base, archive, checksum;
 
 test.before(async () => {
@@ -22,10 +25,12 @@ test.before(async () => {
   const fixture = path.join(base, folder);
   await fs.mkdir(path.join(fixture, 'node_modules/npm/bin'), { recursive: true });
   await fs.copyFile(process.execPath, path.join(fixture, 'node.exe'));
-  await fs.writeFile(path.join(fixture, 'node_modules/npm/bin/npm-cli.js'), "require('node:fs').writeFileSync('.components-ready', ''); console.log('fixture npm complete');\n");
+  await fs.writeFile(path.join(fixture, 'node_modules/npm/bin/npm-cli.js'), "require('node:fs').writeFileSync('.components-ready', ''); console.error('npm notice fixture advisory'); console.log('fixture npm complete');\n");
+  await fs.mkdir(path.dirname(path.join(fixture, nestedNpmFile)), { recursive: true });
+  await fs.writeFile(path.join(fixture, nestedNpmFile), 'fixture nested npm dependency');
   archive = path.join(base, folder + '.zip');
   await run(powershell, ['-NoProfile', '-Command', 'Compress-Archive -LiteralPath $env:SZU_FIXTURE -DestinationPath $env:SZU_ARCHIVE'], {
-    env: { ...process.env, SZU_FIXTURE: fixture, SZU_ARCHIVE: archive }, timeout: 60000,
+    env: { ...shellEnv, SZU_FIXTURE: fixture, SZU_ARCHIVE: archive }, timeout: 60000,
   });
   checksum = createHash('sha256').update(await fs.readFile(archive)).digest('hex');
 });
@@ -34,8 +39,8 @@ test.after(async () => { if (base) await fs.rm(base, { recursive: true, force: t
 async function prepare(name) {
   const root = path.join(base, name);
   await fs.mkdir(path.join(root, 'app/student'), { recursive: true });
-  await fs.writeFile(path.join(root, 'app/student/install-windows.ps1'), '\uFEFF' + await fs.readFile(installer, 'utf8'));
-  await fs.writeFile(path.join(root, 'app/student/launch-windows.ps1'), '\uFEFF' + await fs.readFile(launcher, 'utf8'));
+  await fs.writeFile(path.join(root, 'app/student/install-windows.ps1'), '\uFEFF' + (await fs.readFile(installer, 'utf8')).replace(/^\uFEFF/, ''));
+  await fs.writeFile(path.join(root, 'app/student/launch-windows.ps1'), '\uFEFF' + (await fs.readFile(launcher, 'utf8')).replace(/^\uFEFF/, ''));
   await fs.writeFile(path.join(root, 'app/student/start.mjs'), "import fs from 'node:fs'; process.exit(fs.existsSync('app/.components-ready') ? 0 : 1);\n");
   await fs.writeFile(path.join(root, '依赖校验.sha256'), checksum + '  ' + folder + '.zip\n');
   return root;
@@ -50,7 +55,7 @@ function Invoke-WebRequest {
     Copy-Item -LiteralPath $env:SZU_ARCHIVE -Destination $OutFile
 }
 & $env:SZU_INSTALLER -NodeOnly:($env:SZU_NODE_ONLY -eq '1')
-`], { env: { ...process.env, SZU_ROOT: root, SZU_ARCHIVE: downloadedArchive,
+`], { env: { ...shellEnv, SZU_ROOT: root, SZU_ARCHIVE: downloadedArchive,
     SZU_INSTALLER: path.join(root, 'app/student/install-windows.ps1'),
     SZU_NODE_ONLY: nodeOnly ? '1' : '0' }, timeout: 60000 });
 }
@@ -82,6 +87,25 @@ test('Windows checksum failure explains its stage and preserves a complete local
   await assertClean(root);
 });
 
+test('Windows bootstrap keeps a real npm failure visible and releases the download lock', { skip: !available }, async () => {
+  const root = await prepare('npm-failure');
+  await install(root);
+  await fs.writeFile(path.join(root, 'runtime/windows-x64/node_modules/npm/bin/npm-cli.js'), "console.error('fixture npm failure'); process.exit(7);\n");
+  const error = await install(root, { nodeOnly: false }).then(() => assert.fail('must reject npm exit 7'), error => error);
+  assert.equal(error.code, 1);
+  assert.match(error.stdout, /组件下载失败/);
+  assert.match(await fs.readFile(path.join(root, 'runtime/install-error.log'), 'utf8'), /fixture npm failure/);
+  await assertClean(root);
+});
+
+test('Windows bootstrap extracts nested npm dependencies beyond the legacy 260-character limit', { skip: !available }, async () => {
+  const root = await prepare('深层目录-'.repeat(15));
+  assert(path.join(root, 'runtime/.download-' + '0'.repeat(32), folder, nestedNpmFile).length > 260);
+  await install(root);
+  assert.equal(await fs.readFile(path.join(root, 'runtime/windows-x64', nestedNpmFile), 'utf8'), 'fixture nested npm dependency');
+  await assertClean(root);
+});
+
 test('Windows extraction failure reports the actual cause and releases the installer lock', { skip: !available }, async () => {
   const root = await prepare('extract failure'), malformed = path.join(base, 'malformed.zip');
   await fs.writeFile(malformed, 'not a zip');
@@ -98,16 +122,20 @@ test('Windows extraction failure reports the actual cause and releases the insta
 
 test('Windows launcher finds and removes its ready file in a bracketed installation path', { skip: !available }, async () => {
   const root = await prepare('[启动 2]');
-  await fs.mkdir(path.join(root, 'runtime'));
+  await fs.mkdir(path.join(root, 'runtime/windows-x64'), { recursive: true });
+  await fs.copyFile(process.execPath, path.join(root, 'runtime/windows-x64/node.exe'));
+  await fs.writeFile(path.join(root, 'app/student/start.mjs'), "import fs from 'node:fs'; const index=process.argv.indexOf('--ready-file'); fs.writeFileSync(process.argv[index+1], '{}');\n");
   const result = await run(powershell, ['-NoProfile', '-Command', `
 function Start-Process {
     param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle, $RedirectStandardOutput, $RedirectStandardError, [switch]$PassThru)
-    $ready = [regex]::Match($ArgumentList, '--ready-file "([^"]+)"').Groups[1].Value
-    Set-Content -LiteralPath $ready -Value '{}'
-    return [pscustomobject]@{ HasExited = $false }
+    if ($FilePath -eq 'explorer.exe') { return }
+    Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters
 }
 & $env:SZU_LAUNCHER
-`], { env: { ...process.env, SZU_LAUNCHER: path.join(root, 'app/student/launch-windows.ps1') }, timeout: 15000 });
+`], { env: { ...shellEnv, SZU_LAUNCHER: path.join(root, 'app/student/launch-windows.ps1') }, timeout: 15000 }).catch(async error => {
+    const logs = await Promise.all((await fs.readdir(path.join(root, 'runtime'))).filter(name => name.endsWith('.log')).map(name => fs.readFile(path.join(root, 'runtime', name), 'utf8')));
+    throw new Error(error.stdout + '\n' + logs.join('\n'));
+  });
   assert.match(result.stdout, /控制台已打开/);
-  assert.deepEqual(await fs.readdir(path.join(root, 'runtime')), []);
+  assert.deepEqual((await fs.readdir(path.join(root, 'runtime'))).filter(name => name.endsWith('.json')), []);
 });

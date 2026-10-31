@@ -24,7 +24,9 @@ test('Edge discovery reads the selected browser profiles on Mac and Windows', as
 
 
 test('discovery rejects unknown browser kinds and reports a missing Edge without using Chrome', async () => {
-  for (const kind of ['firefox', '__proto__', '']) await assert.rejects(browsers.discoverBrowser({ kind }), /Chrome 或 Edge/);
+  for (const kind of ['__proto__', '']) await assert.rejects(browsers.discoverBrowser({ kind }), /Chrome、Edge 或 Firefox/);
+  const firefox = await browsers.discoverBrowser({ kind: 'firefox', platform: 'win32' });
+  assert.equal(firefox.available, false); assert.match(firefox.error, /仅在 Linux/);
   const found = await browsers.discoverBrowser({ kind: 'edge', platform: 'win32', env: {} });
   assert.equal(found.installed, false); assert.equal(found.available, false); assert.equal(found.kind, 'edge');
   assert.match(found.error, /Microsoft Edge/); assert.deepEqual(found.profiles, []);

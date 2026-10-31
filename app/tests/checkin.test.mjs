@@ -138,7 +138,7 @@ test('setup requires script acknowledgement and a known Chrome profile, with no 
   await assert.rejects(f.service.configure({ ...settings, time: '25:00' }), /时间/);
   await f.service.configure(settings); await f.service.start();
   assert(!await fs.stat(path.join(f.dataDir, 'api.json')).catch(() => null));
-  assert.equal((await fs.stat(path.join(f.dataDir, 'checkin.json'))).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal((await fs.stat(path.join(f.dataDir, 'checkin.json'))).mode & 0o777, 0o600);
 });
 
 test('Chrome opens one batch with the chosen profile and literal URL arguments; errors affect only that batch', async () => {

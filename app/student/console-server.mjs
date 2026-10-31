@@ -263,7 +263,7 @@ export async function createConsole({ appDir, dataDir, spawnController, browserO
 
   async function mutate(route, body) {
     if (route === '/api/browser-select') {
-      if (!Object.hasOwn(browserTypes, body.kind)) throw new Error('请选择 Chrome 或 Edge。');
+      if (!Object.hasOwn(browserTypes, body.kind)) throw new Error('请选择 Chrome、Edge 或 Firefox。');
       if (active.size || queueRunning) throw new Error('先停止课程并等待已发出的解题请求处理完，再切换浏览器。');
       if (checkin.state().running) throw new Error('签到正在执行，请稍后切换浏览器。');
       if (body.sameAccount !== true) throw new Error('请确认两个浏览器使用同一个课程账号。');
