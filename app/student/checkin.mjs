@@ -152,7 +152,7 @@ export async function createCheckin({ dataDir, appDir, getCourses, getBrowserKin
   async function testBrowser(profileDirectory) {
     const browser = await discoverBrowser({ kind: getBrowserKind() });
     if (!browser.available || !browser.profiles.some(profile => profile.directory === profileDirectory)) throw new Error(browser.error || '请选择浏览器资料。');
-    const results = await openPages(['https://www.uooc.net.cn/'], { executable: browser.executable, userDataDir: browser.userDataDir, profileDirectory });
+    const results = await openPages(['https://www.uooc.net.cn/'], { kind: getBrowserKind(), executable: browser.executable, userDataDir: browser.userDataDir, profileDirectory });
     if (!results?.[0]?.ok) throw new Error(results?.[0]?.error || '浏览器打开命令失败。');
     testedProfile = JSON.stringify({ kind: getBrowserKind(), executable: browser.executable, userDataDir: browser.userDataDir, profileDirectory });
     log('已请求用所选浏览器资料打开 UOOC，请自行确认账号。');

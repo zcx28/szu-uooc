@@ -10,8 +10,9 @@ import { defaults, saveJSON } from '../student/settings.mjs';
 import { serviceFingerprint } from '../api-protocol.mjs';
 
 const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
-const executablePath = process.env.SZU_UOOC_CHROME || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || chromium.executablePath();
+const { chromium, firefox } = require('playwright');
+const browserType = process.env.SZU_TEST_ENGINE === 'firefox' ? firefox : chromium;
+const executablePath = browserType === firefox ? firefox.executablePath() : process.env.SZU_UOOC_CHROME || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || chromium.executablePath();
 const waitFor = async (predicate, timeout=8000) => { for (let i=0;i<timeout/100;i++) { if (await predicate()) return; await new Promise(resolve=>setTimeout(resolve,100)); } throw new Error('Verification controller timed out'); };
 
 const courseHTML = `<!doctype html><meta charset="utf-8"><title>验证回归课程</title><video id="player" src="/fixture.mp4" muted style="display:none"></video><iframe src="/exam/901" style="width:100%;height:700px;border:0"></iframe><script>
@@ -74,7 +75,7 @@ window.angular={element:node=>({scope:()=>node.__scope})};
 
 async function fixture(t, { rejectCount=0, closeDelay=0, verify, followupVideo=false, videoFirst=false, observePage, focusBrowser, startupRedirect=false, fetchAPI, ledger, answerMode='ai', questionType='10', randomValue }={}) {
   const temp=await fs.mkdtemp(path.join(os.tmpdir(),'szu-verification-controller-'));
-  const browser=await chromium.launch({executablePath,headless:true});const context=await browser.newContext();
+  const browser=await browserType.launch({executablePath,headless:true});const context=await browser.newContext();
   const video=await fs.readFile(new URL('./fixtures/three-seconds.mp4',import.meta.url));
   await context.route('https://www.uooc.net.cn/**',route=>{const pathname=new URL(route.request().url()).pathname;return route.fulfill({contentType:pathname==='/fixture.mp4'?'video/mp4':'text/html',body:pathname==='/fixture.mp4'?video:pathname==='/exam/901'?examHTML:pathname==='/login'?'<script>setTimeout(()=>location.replace("/home/learn/index#/123/1/2/900/section"),400)</script>':courseHTML});});
   await context.addInitScript(value=>{window.fixtureRejectCount=value.rejectCount;window.fixtureCloseDelay=value.closeDelay;window.fixtureWithVideo=value.followupVideo;window.fixtureVideoFirst=value.videoFirst;window.fixtureNeedsAI=value.needsAI;window.fixtureQuestionType=value.questionType;if(value.randomValue!==undefined)Math.random=()=>value.randomValue;},{rejectCount,closeDelay,followupVideo,videoFirst,needsAI:Boolean(fetchAPI),questionType,randomValue});
@@ -381,7 +382,8 @@ test('a human verification callback that replaces the page model continues the s
   catch(error) { throw new Error(error.message+' '+JSON.stringify(states.slice(-6).map(({phase,sourceId,error})=>({phase,sourceId,error})))); }
   await running;
   assert.equal(states.at(-1).completed,2);
-  assert(states.some(state=>state.phase==='video'&&state.sourceId==='902'),'human verification continues into the next course resource');
+  // A short video can finish between controller polls, especially in Firefox.
+  assert.deepEqual(await page.evaluate(()=>window.fixtureFinishedVideos),['902'],'human verification continues into the next course resource');
   assert.equal(states.filter(state=>state.phase==='awaiting_verification').length,1,'the human callback must not reopen the quiz');
   const submitted=await page.evaluate(()=>window.fixtureSubmissionStates);
   assert.equal(submitted.length,1,'the native submit event occurs once');

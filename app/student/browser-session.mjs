@@ -7,6 +7,7 @@ import { runController } from '../controller.mjs';
 import { connectOriginalChrome } from '../chrome-connection.mjs';
 import { validateCourseURL } from './settings.mjs';
 import { discoverChrome, openCheckinPages, checkinURL, activateChromeProcess, browserTypes, importFirefoxSession } from './checkin-browser.mjs';
+import { prepareFirefox, firefoxCookiesFromProfile } from './firefox-session.mjs';
 
 export function courseFromURL(value) {
   let url;
@@ -55,27 +56,34 @@ export function createBrowserSession({ appDir, dataDir, connectBrowser, discover
         // launch; never copy a personal database or overwrite saved course state.
         const require = createRequire(path.join(appDir, 'package.json'));
         const { firefox } = require('playwright');
+        await prepareFirefox(appDir, firefox, message => { status.message = message; log(message); });
         const dest = path.join(dataDir, 'firefox-profile');
         const info = await discoverBrowser({ kind: 'firefox' });
         const profileDirectory = info.lastUsedProfile || info.profiles[0]?.directory;
         const cookies = profileDirectory ? await importFirefoxSession(info.userDataDir, dest, profileDirectory) : [];
+        // Restore only this automation profile's session cookies on reconnect.
+        // Playwright does not restore Firefox's previous tabs/session itself.
+        const ownCookies = await firefoxCookiesFromProfile(dataDir, 'firefox-profile');
         const context = await firefox.launchPersistentContext(dest, {
           headless: false,
           viewport: null,
-          firefoxUserPrefs: { 'dom.webdriver.enabled': false },
+          firefoxUserPrefs: { 'dom.webdriver.enabled': false, 'browser.sessionstore.privacy_level': 0, 'browser.startup.page': 3 },
         });
-        await context.addInitScript(() => {
-          try { delete Object.getPrototypeOf(navigator).webdriver; } catch {}
-          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        });
-        if (cookies.length) await context.addCookies(cookies);
-        const home = catalogPage(context) || context.pages().find(page => page.url() === 'about:blank') || await context.newPage();
         try {
-          await home.goto('https://www.uooc.net.cn/home/index', { waitUntil: 'domcontentloaded', timeout: 45000 });
-          await home.bringToFront();
-        } catch (error) {
-          log('Firefox 打开优课网失败：' + String(error.message).slice(0, 240));
-        }
+          await context.addInitScript(() => {
+            try { delete Object.getPrototypeOf(navigator).webdriver; } catch {}
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          });
+          if (cookies.length || ownCookies.length) await context.addCookies([...cookies, ...ownCookies]);
+          log(cookies.length ? `已从 Firefox 导入 ${cookies.length} 项课程及学校登录 Cookie。` : ownCookies.length ? '已恢复 Firefox 自动化窗口保存的登录会话。' : '未找到可导入的 Firefox 登录会话；如未登录，请在打开的窗口内登录。');
+          const home = catalogPage(context) || context.pages().find(page => page.url() === 'about:blank') || await context.newPage();
+          try {
+            await home.goto('https://www.uooc.net.cn/home/index', { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await home.bringToFront();
+          } catch (error) {
+            log('Firefox 打开优课网失败：' + String(error.message).slice(0, 240));
+          }
+        } catch (error) { await context.close().catch(() => {}); throw error; }
         let closed = false;
         context.once('close', () => { closed = true; });
         browser = {
@@ -95,7 +103,7 @@ export function createBrowserSession({ appDir, dataDir, connectBrowser, discover
       const connected = browser;
       connected.once('disconnected', () => { if (browser !== connected) return; browser = null; status.status = 'idle'; status.message = `${name()} 已断开`; });
       return browser;
-    })().catch(error => { log(`${name()} 连接错误：` + String(error.message).replace(/(?:ws|https?):\/\/[^\s<>]+/g, '[连接地址]').slice(0, 800)); status.status = 'error'; status.error = `${name()} 连接未完成。检查调试开关，允许连接后重试。`; throw new Error(status.error); }).finally(() => { connecting = null; });
+    })().catch(error => { log(`${name()} 连接错误：` + String(error.message).replace(/(?:ws|https?):\/\/[^\s<>]+/g, '[连接地址]').slice(0, 800)); status.status = 'error'; status.error = getBrowserKind() === 'firefox' ? 'Firefox 连接未完成。请检查网络及浏览器组件，关闭旧的自动化窗口后重试；详情见运行记录。' : `${name()} 连接未完成。检查调试开关，允许连接后重试。`; throw new Error(status.error); }).finally(() => { connecting = null; });
     return connecting;
   }
   async function open(kind, courseURL) {
